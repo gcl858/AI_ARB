@@ -142,6 +142,25 @@
       transform: translateY(-1px);
     }
     #navbar .nav-btn svg { width: 18px; height: 18px; }
+    #btn-engine {
+      width: auto;
+      padding: 0 10px;
+      gap: 4px;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .4px;
+    }
+    #btn-engine.elk-active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    #btn-engine .engine-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+    }
     #filePicker { display: none; }
 
     /* ─── Upload Zone ─── */
@@ -455,6 +474,13 @@
 
   <div class="spacer"></div>
 
+  <button class="nav-btn" id="btn-engine" title="切換圖表排版引擎（DAG / ELK）">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0">
+      <circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="19" r="2"/>
+      <line x1="7" y1="12" x2="17" y2="6"/><line x1="7" y1="12" x2="17" y2="18"/>
+    </svg>
+    <span class="engine-badge" id="engine-label">DAG</span>
+  </button>
   <button class="nav-btn" id="btn-toc" title="章節清單" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <line x1="3" y1="6" x2="21" y2="6"/>
@@ -539,11 +565,21 @@
 <script type="module">
   import { marked } from "https://cdn.jsdelivr.net/npm/marked@17.0.3/lib/marked.esm.js";
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  import elkLayouts from "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.0/dist/mermaid-layout-elk.esm.min.mjs";
+
+  // 一次性註冊 ELK 引擎
+  mermaid.registerLayoutLoaders(elkLayouts);
 
   const isDark = () => document.documentElement.dataset.theme === "dark";
 
+  // layout: 'default'(dagre) 或 'elk'
+  let mermaidLayout = 'default';
+  let mermaidDiagrams = []; // { node, source }
+
   function initMermaid() {
-    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
+    const cfg = { startOnLoad: false, securityLevel: "loose", theme: "default" };
+    if (mermaidLayout !== 'default') cfg.layout = mermaidLayout;
+    mermaid.initialize(cfg);
   }
   initMermaid();
 
@@ -593,18 +629,19 @@
     preview.innerHTML = marked.parse(mdText);
 
     // Mermaid blocks
-    const nodes = [];
+    mermaidDiagrams = [];
     preview.querySelectorAll("pre code[class*='mermaid']").forEach(codeEl => {
       const text = codeEl.textContent.trim();
       const div = document.createElement("div");
       div.className = "mermaid";
       div.textContent = text;
+      div.dataset.source = text; // 保存原始碼供引擎切換重繪
       codeEl.parentElement.replaceWith(div);
-      nodes.push(div);
+      mermaidDiagrams.push({ node: div, source: text });
     });
-    if (nodes.length) {
+    if (mermaidDiagrams.length) {
       initMermaid();
-      for (const node of nodes) {
+      for (const { node } of mermaidDiagrams) {
         try {
           await mermaid.run({ nodes: [node] });
         } catch (e) {
@@ -618,6 +655,40 @@
     buildToc();
     previewWrapper.scrollIntoView({ behavior: "smooth" });
   }
+
+  // ─── Mermaid Engine Switch ───
+  async function rerenderMermaid() {
+    if (mermaidDiagrams.length === 0) return;
+    initMermaid();
+    for (const { node, source } of mermaidDiagrams) {
+      // 還原為原始碼，清除已處理標記
+      node.removeAttribute("data-processed");
+      node.innerHTML = "";
+      node.textContent = source;
+      node.style.cssText = "";
+      try {
+        await mermaid.run({ nodes: [node] });
+      } catch (e) {
+        console.warn("Mermaid re-render skipped:", e);
+        node.style.cssText = "border:1px solid #f66;padding:8px;border-radius:6px;color:#c33;font-size:.8rem;";
+        node.textContent = "⚠ 圖表解析失敗：" + (e.message || e);
+      }
+    }
+  }
+
+  const btnEngine   = document.getElementById("btn-engine");
+  const engineLabel = document.getElementById("engine-label");
+
+  btnEngine.addEventListener("click", async () => {
+    mermaidLayout = mermaidLayout === 'default' ? 'elk' : 'default';
+    const isElk = mermaidLayout === 'elk';
+    engineLabel.textContent = isElk ? 'ELK' : 'DAG';
+    btnEngine.classList.toggle('elk-active', isElk);
+    btnEngine.title = isElk
+      ? '目前：ELK 引擎 — 點擊切換回 DAG（Dagre）'
+      : '目前：DAG 引擎（Dagre）— 點擊切換至 ELK';
+    await rerenderMermaid();
+  });
 
   // ─── TOC ───
   const tocSidebar = document.getElementById("toc-sidebar");
